@@ -12,7 +12,6 @@ class AppTheme {
   static const Color soonAmber = Color(0xFFF59E0B);
   static const Color successGreen = Color(0xFF10B981);
 
-  // Aliases utilisés dans PlayerScreen et widgets
   static const Color scaffoldBg = backgroundLight;
   static const Color cardBg = surfaceWhite;
   static const Color borderColor = borderLight;
@@ -40,12 +39,12 @@ class AppTheme {
         surfaceTintColor: Colors.transparent,
         iconTheme: IconThemeData(color: textPrimary),
       ),
-      cardTheme: CardTheme(
+      cardTheme: const CardThemeData(
         color: surfaceWhite,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: borderLight, width: 1),
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+          side: BorderSide(color: borderLight, width: 1),
         ),
       ),
     );

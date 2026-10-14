@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,15 +15,7 @@ class CricfyLiveApp extends StatelessWidget {
     return MaterialApp(
       title: 'Cricfy Live',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF0B0E14),
-        primaryColor: const Color(0xFFFF5722),
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFFF5722),
-          secondary: Color(0xFFFFD60A),
-          surface: Color(0xFF131722),
-        ),
-      ),
+      theme: AppTheme.lightTheme,
       home: const HomeScreen(),
     );
   }
