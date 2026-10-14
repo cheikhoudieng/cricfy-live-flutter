@@ -4,20 +4,63 @@ enum MatchStatus { live, startingSoon, upcoming, ended }
 
 class MatchFormat {
   final String title;
+  final String quality;
   final String webLink;
   final String streamUrl;
+  final String formatType; // 'dash', 'mpd', 'hls', 'mp4', 'auto'
+  final String? mimeType;
+  final Map<String, String>? headers;
 
   MatchFormat({
     required this.title,
+    this.quality = 'HD 1080p',
     required this.webLink,
     required this.streamUrl,
+    this.formatType = 'auto',
+    this.mimeType,
+    this.headers,
   });
 
+  bool get isDash {
+    final lower = (formatType + ' ' + streamUrl + ' ' + (mimeType ?? '')).toLowerCase();
+    return lower.contains('dash') || lower.contains('.mpd') || lower.contains('dash+xml');
+  }
+
+  bool get isHls {
+    final lower = (formatType + ' ' + streamUrl + ' ' + (mimeType ?? '')).toLowerCase();
+    return lower.contains('hls') || lower.contains('.m3u8') || lower.contains('mpegurl');
+  }
+
   factory MatchFormat.fromJson(Map<String, dynamic> json) {
+    final rawFormat = json['format'] ?? json['type'] ?? '';
+    final url = json['streamUrl'] ?? json['webLink'] ?? json['url'] ?? '';
+    final mime = json['mimeType'] ?? json['mime'];
+
+    String detectedType = rawFormat.toString().toLowerCase();
+    if (detectedType.isEmpty || detectedType == 'auto') {
+      final u = url.toString().toLowerCase();
+      if (u.contains('.mpd') || u.contains('dash')) {
+        detectedType = 'dash';
+      } else if (u.contains('.m3u8') || u.contains('hls')) {
+        detectedType = 'hls';
+      } else {
+        detectedType = 'auto';
+      }
+    }
+
+    Map<String, String>? hdrs;
+    if (json['headers'] is Map) {
+      hdrs = (json['headers'] as Map).map((k, v) => MapEntry(k.toString(), v.toString()));
+    }
+
     return MatchFormat(
-      title: json['title'] ?? 'Serveur Inconnu',
-      webLink: json['webLink'] ?? '',
-      streamUrl: json['streamUrl'] ?? json['webLink'] ?? '',
+      title: json['title'] ?? 'Serveur Principal',
+      quality: json['quality'] ?? (detectedType == 'dash' ? '1080p MPEG-DASH' : 'Full HD'),
+      webLink: json['webLink'] ?? url,
+      streamUrl: url,
+      formatType: detectedType,
+      mimeType: mime,
+      headers: hdrs,
     );
   }
 }
@@ -60,7 +103,11 @@ class SportEvent {
         final format = DateFormat('yyyy/MM/dd HH:mm:ss Z');
         return format.parse(dateStr, true).toLocal();
       } catch (_) {
-        return DateTime.now();
+        try {
+          return DateTime.parse(dateStr).toLocal();
+        } catch (_) {
+          return DateTime.now();
+        }
       }
     }
 
@@ -70,17 +117,17 @@ class SportEvent {
         .toList();
 
     return SportEvent(
-      id: json['id']?.toString() ?? '',
+      id: json['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
       title: json['title'] ?? '',
-      slug: json['slug'] ?? '',
-      teamA: info['teamA'] ?? 'Équipe A',
-      teamB: info['teamB'] ?? 'Équipe B',
-      teamAFlag: info['teamAFlag'],
-      teamBFlag: info['teamBFlag'],
-      sportCategory: info['eventCat'] ?? json['cat'] ?? 'Sport',
-      tournament: info['eventType'] ?? '',
-      startDate: parseUtc(info['startTime']),
-      endDate: parseUtc(info['endTime']),
+      slug: json['slug'] ?? 'default-match',
+      teamA: info['teamA'] ?? json['teamA'] ?? 'Équipe A',
+      teamB: info['teamB'] ?? json['teamB'] ?? 'Équipe B',
+      teamAFlag: info['teamAFlag'] ?? json['teamAFlag'],
+      teamBFlag: info['teamBFlag'] ?? json['teamBFlag'],
+      sportCategory: info['eventCat'] ?? json['cat'] ?? 'Football',
+      tournament: info['eventType'] ?? json['tournament'] ?? 'Championnat',
+      startDate: parseUtc(info['startTime'] ?? json['startTime']),
+      endDate: parseUtc(info['endTime'] ?? json['endTime']),
       formats: parsedFormats,
     );
   }
