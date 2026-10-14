@@ -11,7 +11,6 @@ class CricfyApi {
   static Map<String, String> get defaultHeaders => {
         'User-Agent': 'okhttp/4.12.0',
         'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate',
       };
 
   /// Récupère dynamiquement les événements en direct depuis le serveur réel de l'APK
@@ -25,7 +24,7 @@ class CricfyApi {
     }
 
     final encryptedText = response.body.trim();
-    final decryptedJson = CryptoService.decrypt(encryptedText);
+    final decryptedJson = CryptoService.decodeOrDecrypt(encryptedText);
 
     if (decryptedJson == null || decryptedJson.isEmpty) {
       throw Exception('Échec du déchiffrement AES du flux Cricfy');
@@ -46,7 +45,7 @@ class CricfyApi {
 
       if (response.statusCode == 200) {
         final encryptedText = response.body.trim();
-        final decryptedJson = CryptoService.decrypt(encryptedText);
+        final decryptedJson = CryptoService.decodeOrDecrypt(encryptedText);
         if (decryptedJson != null && decryptedJson.isNotEmpty) {
           final Map<String, dynamic> data = jsonDecode(decryptedJson);
           if (data['formats'] is List) {

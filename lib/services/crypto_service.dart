@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 
 class CryptoService {
@@ -23,29 +24,38 @@ class CryptoService {
 
   /// Déchiffre le payload AES-128-CBC encodé en Base64
   static String? decrypt(String encryptedBase64) {
-    if (encryptedBase64.isEmpty) return null;
+    final cleanInput = encryptedBase64
+        .replaceAll('\r', '')
+        .replaceAll('\n', '')
+        .replaceAll(' ', '')
+        .trim();
+    if (cleanInput.isEmpty) return null;
 
-    // Tentative 1 : Clé standard
+    // Tentative 1 : Clé standard (Pair 1) avec IV explicite
     try {
       final key = enc.Key.fromUtf8(primaryKey);
       final iv = enc.IV.fromUtf8(primaryIv);
       final encrypter = enc.Encrypter(
-        enc.AES(key, mode: enc.AESMode.cbc, padding: 'PKCS7'),
+        enc.AES(key, mode: enc.AESMode.cbc),
       );
-      final decrypted = encrypter.decrypt64(encryptedBase64);
+      final decrypted = encrypter.decrypt64(cleanInput, iv: iv);
       return decrypted;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("CryptoService Tentative 1 failed: $e");
+    }
 
-    // Tentative 2 : Clé de secours
+    // Tentative 2 : Clé de secours (Pair 2) avec IV explicite
     try {
       final key = enc.Key.fromUtf8(fallbackKey);
       final iv = enc.IV.fromUtf8(fallbackIv);
       final encrypter = enc.Encrypter(
-        enc.AES(key, mode: enc.AESMode.cbc, padding: 'PKCS7'),
+        enc.AES(key, mode: enc.AESMode.cbc),
       );
-      final decrypted = encrypter.decrypt64(encryptedBase64);
+      final decrypted = encrypter.decrypt64(cleanInput, iv: iv);
       return decrypted;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("CryptoService Tentative 2 failed: $e");
+    }
 
     return null;
   }
