@@ -13,9 +13,6 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
-        maven {
-            url 'https://storage.googleapis.com/download.flutter.io'
-        }
     }
 }
 
@@ -26,3 +23,13 @@ plugins {
 }
 
 include ":app"
+
+def flutterSdkPath = {
+    def properties = new Properties()
+    file("local.properties").withInputStream { properties.load(it) }
+    def flutterSdkPath = properties.getProperty("flutter.sdk")
+    assert flutterSdkPath != null : "flutter.sdk not set in local.properties"
+    return flutterSdkPath
+}()
+
+apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
