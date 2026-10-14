@@ -239,7 +239,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const CircularProgressIndicator(color: AppTheme.primaryOrange),
+                  CircularProgressIndicator(color: AppTheme.primaryOrange),
                   const SizedBox(height: 16),
                   Text(
                     'Connexion au flux ${activeSource?.isDash == true ? "MPEG-DASH (.mpd)" : "HLS (.m3u8)"}...',
@@ -424,7 +424,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           const SizedBox(height: 4),
           Text(
             'Chronomètre : ${ev.timeLabel} • ${_sources.length} flux détectés',
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],
       ),
@@ -497,11 +497,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
             subtitle: Text(
               '${source.quality} • ${source.isDash ? "MPEG-DASH Manifest" : "HLS Stream"}',
-              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+              style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
             ),
             trailing: isSelected
-                ? const Icon(Icons.check_circle, color: AppTheme.primaryOrange)
-                : const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+                ? Icon(Icons.check_circle, color: AppTheme.primaryOrange)
+                : Icon(Icons.chevron_right, color: AppTheme.textSecondary),
             onTap: () {
               if (!isSelected) {
                 _playSource(index);

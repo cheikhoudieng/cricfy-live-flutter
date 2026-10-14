@@ -2,12 +2,24 @@ import 'dart:convert';
 import 'package:encrypt/encrypt.dart' as enc;
 
 class CryptoService {
-  // Clés extraites de libnative-lib.so (0x64c10)
   static const String primaryKey = "3hHzxYAgSGI8/ham";
   static const String primaryIv = "UqCvkvjecEIz842V";
 
   static const String fallbackKey = "MqeYGCT4AYKoHKrT";
   static const String fallbackIv = "oHKrTQuPx8zl8oJ+";
+
+  /// Déchiffre un payload chiffré AES OU retourne le texte s'il est déjà en clair / JSON
+  static String? decodeOrDecrypt(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return null;
+
+    // Si c'est déjà du JSON clair (commence par [ ou {)
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      return trimmed;
+    }
+
+    return decrypt(trimmed);
+  }
 
   /// Déchiffre le payload AES-128-CBC encodé en Base64
   static String? decrypt(String encryptedBase64) {
