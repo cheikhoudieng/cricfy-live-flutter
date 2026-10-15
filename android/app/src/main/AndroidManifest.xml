@@ -26,6 +26,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name=".CricfyPlayerActivity"
+            android:exported="false"
+            android:theme="@style/NormalTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true" />
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

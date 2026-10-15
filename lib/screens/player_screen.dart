@@ -5,6 +5,7 @@ import 'package:chewie/chewie.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/sport_event.dart';
 import '../services/cricfy_api.dart';
+import '../services/native_player_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/team_logo.dart';
 
@@ -41,10 +42,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (!mounted) return;
 
     if (extraFormats.isNotEmpty) {
-      // Prioriser les flux directs HLS / non-DRM en premier pour éviter l'écran noir
+      // Prioriser les flux directs HLS / non-DRM pour le lecteur inline
       final directStreams = extraFormats.where((f) => !f.isDash && f.drmKey == null).toList();
       final otherStreams = extraFormats.where((f) => f.isDash || f.drmKey != null).toList();
-      
+
       setState(() {
         _sources = [...directStreams, ...otherStreams];
       });
@@ -60,11 +61,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  void _openNativePlayerForSource(MatchFormat source) {
+    NativePlayerService.openNativePlayer(
+      title: '${widget.event.teamA} vs ${widget.event.teamB} (${source.title})',
+      streamUrl: source.streamUrl,
+      drmKey: source.drmKey,
+      headers: source.headers,
+      allFormats: _sources,
+    );
+  }
+
   Future<void> _playSource(int index, {int autoTryCount = 0}) async {
     if (!mounted || _sources.isEmpty) return;
 
     final safeIndex = index % _sources.length;
     final source = _sources[safeIndex];
+
+    // Si la source requiert ClearKey DRM, ouvrir directement le lecteur natif ExoPlayer
+    if (source.drmKey != null && source.drmKey!.isNotEmpty) {
+      setState(() {
+        _selectedSourceIndex = safeIndex;
+        _isLoading = false;
+        _errorMessage = null;
+      });
+      _openNativePlayerForSource(source);
+      return;
+    }
 
     setState(() {
       _selectedSourceIndex = safeIndex;
@@ -146,8 +168,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _handleSourceError(int failedIndex, String errorMsg, {int autoTryCount = 0}) {
     if (!mounted) return;
 
-    // Basculer automatiquement sur le prochain serveur disponible jusqu'à 3 tentatives
-    if (autoTryCount < 3 && _sources.length > 1) {
+    if (autoTryCount < 2 && _sources.length > 1) {
       final nextIndex = (failedIndex + 1) % _sources.length;
       debugPrint("Auto-trying next stream: server $nextIndex");
       _playSource(nextIndex, autoTryCount: autoTryCount + 1);
@@ -157,7 +178,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final failedSource = _sources[failedIndex];
     setState(() {
       _isLoading = false;
-      _errorMessage = "Impossible de lire la source \"${failedSource.title}\".\nVeuillez choisir un autre serveur dans la liste ci-dessous.";
+      _errorMessage = "Impossible de lire la source \"${failedSource.title}\".\nEssayez un autre serveur ci-dessous ou ouvrez le lecteur natif.";
     });
   }
 
@@ -212,6 +233,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final isDesktopOrTablet = MediaQuery.of(context).size.width >= 900;
+    final activeSource = _sources.isNotEmpty ? _sources[_selectedSourceIndex] : null;
 
     return KeyboardListener(
       focusNode: _keyboardFocusNode,
@@ -227,6 +249,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 actions: [
+                  if (activeSource != null)
+                    IconButton(
+                      icon: const Icon(Icons.rocket_launch, color: Colors.orangeAccent),
+                      tooltip: 'Ouvrir dans le Lecteur Natif (ClearKey DRM)',
+                      onPressed: () => _openNativePlayerForSource(activeSource),
+                    ),
                   IconButton(
                     icon: Icon(
                       _isCanvasFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
@@ -282,111 +310,168 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       style: const TextStyle(color: Colors.white70, fontSize: 14),
                     ),
                     const SizedBox(height: 16),
-                    if (_sources.length > 1)
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.primaryOrange,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        icon: const Icon(Icons.skip_next),
-                        label: const Text('Essayer un autre serveur'),
-                        onPressed: () {
-                          final next = (_selectedSourceIndex + 1) % _sources.length;
-                          _playSource(next);
-                        },
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (activeSource != null) ...[
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.deepPurple,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: const Icon(Icons.play_circle_fill),
+                            label: const Text('Lecteur Natif (ExoPlayer)'),
+                            onPressed: () => _openNativePlayerForSource(activeSource),
+                          ),
+                          const SizedBox(width: 10),
+                        ],
+                        if (_sources.length > 1)
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: AppTheme.primaryOrange),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: const Icon(Icons.skip_next),
+                            label: const Text('Autre serveur'),
+                            onPressed: () {
+                              final next = (_selectedSourceIndex + 1) % _sources.length;
+                              _playSource(next);
+                            },
+                          ),
+                      ],
+                    ),
                   ],
                 ),
               )
             else if (_chewieController != null)
               Chewie(controller: _chewieController!)
             else
-              const SizedBox(),
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.lock_open, color: Colors.amberAccent, size: 54),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Flux ClearKey DRM : ${activeSource?.title ?? ""}',
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Ce flux est lu via le moteur matériel natif ExoPlayer.',
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primaryOrange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Ouvrir dans le Lecteur Natif ExoPlayer'),
+                      onPressed: () {
+                        if (activeSource != null) _openNativePlayerForSource(activeSource);
+                      },
+                    ),
+                  ],
+                ),
+              ),
 
-            // Badge Protocole (DASH / HLS / DRM) & Avertissement DRM si applicable
+            // Badge Protocole & Bouton Lecteur Natif en haut
             if (!_isLoading && activeSource != null)
               Positioned(
                 top: 12,
                 left: 12,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                right: 12,
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.8),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: activeSource.isDash
-                                  ? const Color(0xFF7C4DFF)
-                                  : const Color(0xFFFF5722),
-                              width: 1.2,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.stream,
-                                color: activeSource.isDash
-                                    ? const Color(0xFF00E5FF)
-                                    : const Color(0xFFFF5722),
-                                size: 14,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                activeSource.isDash ? 'MPEG-DASH (.MPD)' : 'DIRECT HLS (.M3U8)',
-                                style: TextStyle(
-                                  color: activeSource.isDash
-                                      ? const Color(0xFF00E5FF)
-                                      : Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: activeSource.isDash
+                              ? const Color(0xFF7C4DFF)
+                              : const Color(0xFFFF5722),
+                          width: 1.2,
                         ),
-                        if (activeSource.drmKey != null) ...[
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.stream,
+                            color: activeSource.isDash
+                                ? const Color(0xFF00E5FF)
+                                : const Color(0xFFFF5722),
+                            size: 14,
+                          ),
                           const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade900.withOpacity(0.85),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.lock, color: Colors.white, size: 12),
-                                SizedBox(width: 4),
-                                Text(
-                                  'ClearKey DRM',
-                                  style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                                ),
-                              ],
+                          Text(
+                            activeSource.isDash ? 'MPEG-DASH (.MPD)' : 'DIRECT HLS (.M3U8)',
+                            style: TextStyle(
+                              color: activeSource.isDash
+                                  ? const Color(0xFF00E5FF)
+                                  : Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ],
-                      ],
+                      ),
                     ),
-                    if (activeSource.drmKey != null)
+                    if (activeSource.drmKey != null) ...[
+                      const SizedBox(width: 6),
                       Container(
-                        margin: const EdgeInsets.only(top: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.75),
-                          borderRadius: BorderRadius.circular(6),
+                          color: Colors.amber.shade900.withOpacity(0.85),
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                        child: const Text(
-                          'ℹ Si écran noir : choisissez un serveur "DIRECT HLS" ci-dessous',
-                          style: TextStyle(color: Colors.amberAccent, fontSize: 10),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock, color: Colors.white, size: 12),
+                            SizedBox(width: 4),
+                            Text(
+                              'ClearKey DRM',
+                              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ],
                         ),
                       ),
+                    ],
+                    const Spacer(),
+                    // Bouton rapide lecteur natif
+                    InkWell(
+                      onTap: () => _openNativePlayerForSource(activeSource),
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryOrange.withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.launch, color: Colors.white, size: 12),
+                            SizedBox(width: 4),
+                            Text(
+                              'ExoPlayer Natif',
+                              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -575,6 +660,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         final source = _sources[index];
         final isSelected = index == _selectedSourceIndex;
         final isDirect = !source.isDash && source.drmKey == null;
+        final hasClearKey = source.drmKey != null;
 
         return Card(
           elevation: isSelected ? 2 : 0,
@@ -592,12 +678,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
             leading: CircleAvatar(
               backgroundColor: isSelected
                   ? AppTheme.primaryOrange
-                  : (isDirect ? Colors.green.shade50 : const Color(0xFFF0F2F6)),
+                  : (hasClearKey
+                      ? Colors.amber.shade100
+                      : (isDirect ? Colors.green.shade50 : const Color(0xFFF0F2F6))),
               foregroundColor: isSelected
                   ? Colors.white
-                  : (isDirect ? Colors.green.shade700 : AppTheme.textPrimary),
+                  : (hasClearKey
+                      ? Colors.amber.shade900
+                      : (isDirect ? Colors.green.shade700 : AppTheme.textPrimary)),
               child: Icon(
-                isSelected ? Icons.play_arrow : (isDirect ? Icons.check_circle : Icons.tv),
+                hasClearKey ? Icons.lock_open : (isSelected ? Icons.play_arrow : (isDirect ? Icons.check_circle : Icons.tv)),
                 size: 20,
               ),
             ),
@@ -615,42 +705,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   margin: const EdgeInsets.only(top: 4, right: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: isDirect ? Colors.green.shade50 : Colors.deepPurple.shade50,
+                    color: hasClearKey
+                        ? Colors.amber.shade50
+                        : (isDirect ? Colors.green.shade50 : Colors.deepPurple.shade50),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    isDirect ? '🟢 DIRECT HLS' : 'MPEG-DASH',
+                    hasClearKey
+                        ? '⚡ CLEARKEY DASH'
+                        : (isDirect ? '🟢 DIRECT HLS' : 'MPEG-DASH'),
                     style: TextStyle(
-                      color: isDirect ? Colors.green.shade700 : Colors.deepPurple.shade700,
+                      color: hasClearKey
+                          ? Colors.amber.shade900
+                          : (isDirect ? Colors.green.shade700 : Colors.deepPurple.shade700),
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
-                if (source.drmKey != null)
-                  Container(
-                    margin: const EdgeInsets.only(top: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade50,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      '🔒 ClearKey DRM',
-                      style: TextStyle(
-                        color: Colors.amber.shade900,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
               ],
             ),
-            trailing: isSelected
-                ? const Icon(Icons.volume_up, color: AppTheme.primaryOrange)
-                : const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textSecondary),
+            trailing: IconButton(
+              icon: const Icon(Icons.launch, color: AppTheme.primaryOrange, size: 20),
+              tooltip: 'Lire dans ExoPlayer Natif (ClearKey)',
+              onPressed: () => _openNativePlayerForSource(source),
+            ),
             onTap: () {
-              if (!isSelected || _errorMessage != null) {
+              if (hasClearKey) {
+                _openNativePlayerForSource(source);
+              } else {
                 _playSource(index);
               }
             },
