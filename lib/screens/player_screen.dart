@@ -6,6 +6,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/sport_event.dart';
 import '../services/cricfy_api.dart';
 import '../theme/app_theme.dart';
+import '../widgets/team_logo.dart';
 
 class PlayerScreen extends StatefulWidget {
   final SportEvent event;
@@ -40,8 +41,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (!mounted) return;
 
     if (extraFormats.isNotEmpty) {
+      // Prioriser les flux directs HLS / non-DRM en premier pour éviter l'écran noir
+      final directStreams = extraFormats.where((f) => !f.isDash && f.drmKey == null).toList();
+      final otherStreams = extraFormats.where((f) => f.isDash || f.drmKey != null).toList();
+      
       setState(() {
-        _sources = extraFormats;
+        _sources = [...directStreams, ...otherStreams];
       });
     }
 
@@ -78,7 +83,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
 
-    // Détection du protocole : MPEG-DASH (.mpd) vs HLS (.m3u8) vs SmoothStreaming vs standard
+    // Détection du protocole : MPEG-DASH (.mpd) vs HLS (.m3u8) vs standard
     VideoFormat formatHint = VideoFormat.other;
     if (source.isDash || streamUrl.toLowerCase().contains('.mpd')) {
       formatHint = VideoFormat.dash;
@@ -141,8 +146,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _handleSourceError(int failedIndex, String errorMsg, {int autoTryCount = 0}) {
     if (!mounted) return;
 
-    // Si le premier serveur échoue et qu'il y a d'autres serveurs, essayer automatiquement le suivant jusqu'à 2 fois
-    if (autoTryCount < 2 && _sources.length > 1) {
+    // Basculer automatiquement sur le prochain serveur disponible jusqu'à 3 tentatives
+    if (autoTryCount < 3 && _sources.length > 1) {
       final nextIndex = (failedIndex + 1) % _sources.length;
       debugPrint("Auto-trying next stream: server $nextIndex");
       _playSource(nextIndex, autoTryCount: autoTryCount + 1);
@@ -258,7 +263,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   const CircularProgressIndicator(color: AppTheme.primaryOrange),
                   const SizedBox(height: 16),
                   Text(
-                    'Connexion à ${activeSource?.title ?? "la source"} (${activeSource?.isDash == true ? "MPEG-DASH" : "HLS"})...',
+                    'Connexion à ${activeSource?.title ?? "la source"}...',
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                   ),
                 ],
@@ -286,7 +291,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
                         icon: const Icon(Icons.skip_next),
-                        label: const Text('Essayer la Source Suivante'),
+                        label: const Text('Essayer un autre serveur'),
                         onPressed: () {
                           final next = (_selectedSourceIndex + 1) % _sources.length;
                           _playSource(next);
@@ -300,70 +305,88 @@ class _PlayerScreenState extends State<PlayerScreen> {
             else
               const SizedBox(),
 
-            // Badge Protocole (DASH / HLS / DRM)
+            // Badge Protocole (DASH / HLS / DRM) & Avertissement DRM si applicable
             if (!_isLoading && activeSource != null)
               Positioned(
                 top: 12,
                 left: 12,
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.75),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: activeSource.isDash
-                              ? const Color(0xFF7C4DFF)
-                              : const Color(0xFFFF5722),
-                          width: 1.2,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.stream,
-                            color: activeSource.isDash
-                                ? const Color(0xFF00E5FF)
-                                : const Color(0xFFFF5722),
-                            size: 14,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            activeSource.isDash ? 'MPEG-DASH (.MPD)' : 'HLS (.M3U8)',
-                            style: TextStyle(
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.8),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
                               color: activeSource.isDash
-                                  ? const Color(0xFF00E5FF)
-                                  : Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
+                                  ? const Color(0xFF7C4DFF)
+                                  : const Color(0xFFFF5722),
+                              width: 1.2,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.stream,
+                                color: activeSource.isDash
+                                    ? const Color(0xFF00E5FF)
+                                    : const Color(0xFFFF5722),
+                                size: 14,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                activeSource.isDash ? 'MPEG-DASH (.MPD)' : 'DIRECT HLS (.M3U8)',
+                                style: TextStyle(
+                                  color: activeSource.isDash
+                                      ? const Color(0xFF00E5FF)
+                                      : Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (activeSource.drmKey != null) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade900.withOpacity(0.85),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.lock, color: Colors.white, size: 12),
+                                SizedBox(width: 4),
+                                Text(
+                                  'ClearKey DRM',
+                                  style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
+                              ],
                             ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
-                    if (activeSource.drmKey != null) ...[
-                      const SizedBox(width: 6),
+                    if (activeSource.drmKey != null)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        margin: const EdgeInsets.only(top: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: Colors.amber.shade900.withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(20),
+                          color: Colors.black.withOpacity(0.75),
+                          borderRadius: BorderRadius.circular(6),
                         ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.lock, color: Colors.white, size: 12),
-                            SizedBox(width: 4),
-                            Text(
-                              'ClearKey DRM',
-                              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                            ),
-                          ],
+                        child: const Text(
+                          'ℹ Si écran noir : choisissez un serveur "DIRECT HLS" ci-dessous',
+                          style: TextStyle(color: Colors.amberAccent, fontSize: 10),
                         ),
                       ),
-                    ],
                   ],
                 ),
               ),
@@ -456,18 +479,63 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ),
             ],
           ),
+          const SizedBox(height: 12),
+          // Logos et noms des équipes
+          Row(
+            children: [
+              TeamLogoWidget(
+                url: ev.teamAFlag,
+                teamName: ev.teamA,
+                size: 36,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  ev.teamA,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                child: Text(
+                  'VS',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  ev.teamB,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                  ),
+                  textAlign: TextAlign.end,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              TeamLogoWidget(
+                url: ev.teamBFlag,
+                teamName: ev.teamB,
+                size: 36,
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
-            '${ev.teamA}   VS   ${ev.teamB}',
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Chronomètre : ${ev.timeLabel} • ${_sources.length} sources réelles disponibles',
+            'Chronomètre : ${ev.timeLabel} • ${_sources.length} serveurs disponibles',
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],
@@ -506,6 +574,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       itemBuilder: (context, index) {
         final source = _sources[index];
         final isSelected = index == _selectedSourceIndex;
+        final isDirect = !source.isDash && source.drmKey == null;
 
         return Card(
           elevation: isSelected ? 2 : 0,
@@ -521,10 +590,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
           child: ListTile(
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             leading: CircleAvatar(
-              backgroundColor: isSelected ? AppTheme.primaryOrange : const Color(0xFFF0F2F6),
-              foregroundColor: isSelected ? Colors.white : AppTheme.textPrimary,
+              backgroundColor: isSelected
+                  ? AppTheme.primaryOrange
+                  : (isDirect ? Colors.green.shade50 : const Color(0xFFF0F2F6)),
+              foregroundColor: isSelected
+                  ? Colors.white
+                  : (isDirect ? Colors.green.shade700 : AppTheme.textPrimary),
               child: Icon(
-                isSelected ? Icons.play_arrow : Icons.tv,
+                isSelected ? Icons.play_arrow : (isDirect ? Icons.check_circle : Icons.tv),
                 size: 20,
               ),
             ),
@@ -542,13 +615,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   margin: const EdgeInsets.only(top: 4, right: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: source.isDash ? Colors.deepPurple.shade50 : Colors.blue.shade50,
+                    color: isDirect ? Colors.green.shade50 : Colors.deepPurple.shade50,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    source.isDash ? 'MPEG-DASH' : 'HLS (.m3u8)',
+                    isDirect ? '🟢 DIRECT HLS' : 'MPEG-DASH',
                     style: TextStyle(
-                      color: source.isDash ? Colors.deepPurple.shade700 : Colors.blue.shade700,
+                      color: isDirect ? Colors.green.shade700 : Colors.deepPurple.shade700,
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                     ),
@@ -563,7 +636,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      'ClearKey',
+                      '🔒 ClearKey DRM',
                       style: TextStyle(
                         color: Colors.amber.shade900,
                         fontSize: 10,
