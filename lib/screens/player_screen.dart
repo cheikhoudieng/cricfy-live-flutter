@@ -26,58 +26,59 @@ class _PlayerScreenState extends State<PlayerScreen> {
   List<MatchFormat> _sources = [];
   final FocusNode _keyboardFocusNode = FocusNode();
 
-  final List<String> _fallbackDemoStreams = [
-    'https://livesim.dashif.org/livesim/testpic_2s/Manifest.mpd',
-    'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd',
-    'https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8',
-    'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-  ];
-
   @override
   void initState() {
     super.initState();
     WakelockPlus.enable();
     _sources = List.from(widget.event.formats);
-    if (_sources.isEmpty) {
-      _sources.add(MatchFormat(
-        title: 'Serveur DASH Principal (Auto-Detect)',
-        quality: '1080p MPEG-DASH',
-        formatType: 'dash',
-        webLink: _fallbackDemoStreams.first,
-        streamUrl: _fallbackDemoStreams.first,
-      ));
-    }
     _loadChannelDetailsAndPlay();
   }
 
   Future<void> _loadChannelDetailsAndPlay() async {
     setState(() => _isLoading = true);
     final extraFormats = await CricfyApi.fetchChannelFormats(widget.event.slug);
+    if (!mounted) return;
+
     if (extraFormats.isNotEmpty) {
-      _sources = extraFormats;
+      setState(() {
+        _sources = extraFormats;
+      });
     }
-    _playSource(_selectedSourceIndex);
+
+    if (_sources.isNotEmpty) {
+      _playSource(0);
+    } else {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = "Aucun flux vidéo disponible pour cet événement.";
+      });
+    }
   }
 
-  Future<void> _playSource(int index, {bool useFallback = false}) async {
-    if (!mounted) return;
+  Future<void> _playSource(int index, {int autoTryCount = 0}) async {
+    if (!mounted || _sources.isEmpty) return;
+
+    final safeIndex = index % _sources.length;
+    final source = _sources[safeIndex];
+
     setState(() {
-      _selectedSourceIndex = index;
+      _selectedSourceIndex = safeIndex;
       _isLoading = true;
       _errorMessage = null;
     });
 
     _chewieController?.dispose();
+    _chewieController = null;
     await _videoPlayerController?.dispose();
+    _videoPlayerController = null;
 
-    final source = _sources[index];
-    String streamUrl = source.streamUrl.isNotEmpty ? source.streamUrl : source.webLink;
-
-    if (useFallback || streamUrl.isEmpty || !streamUrl.startsWith('http')) {
-      streamUrl = _fallbackDemoStreams[index % _fallbackDemoStreams.length];
+    final streamUrl = source.streamUrl.trim();
+    if (streamUrl.isEmpty || !streamUrl.startsWith('http')) {
+      _handleSourceError(safeIndex, "Lien de flux vide ou invalide", autoTryCount: autoTryCount);
+      return;
     }
 
-    // Détection explicite MPEG-DASH (.mpd) vs HLS (.m3u8) pour ExoPlayer
+    // Détection du protocole : MPEG-DASH (.mpd) vs HLS (.m3u8) vs SmoothStreaming vs standard
     VideoFormat formatHint = VideoFormat.other;
     if (source.isDash || streamUrl.toLowerCase().contains('.mpd')) {
       formatHint = VideoFormat.dash;
@@ -88,23 +89,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     final Map<String, String> requestHeaders = {
-      'User-Agent': 'okhttp/4.12.0',
-      'Origin': CricfyApi.baseUrl,
-      'Referer': '${CricfyApi.baseUrl}/',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     };
     if (source.headers != null) {
       requestHeaders.addAll(source.headers!);
     }
 
     try {
-      _videoPlayerController = VideoPlayerController.networkUrl(
+      final controller = VideoPlayerController.networkUrl(
         Uri.parse(streamUrl),
         formatHint: formatHint,
         httpHeaders: requestHeaders,
       );
 
-      await _videoPlayerController!.initialize();
+      await controller.initialize().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => throw Exception("Délai de connexion dépassé (12s)"),
+      );
 
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
+
+      _videoPlayerController = controller;
       _chewieController = ChewieController(
         videoPlayerController: _videoPlayerController!,
         autoPlay: true,
@@ -123,21 +131,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ),
       );
 
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      setState(() => _isLoading = false);
     } catch (e) {
-      if (!useFallback) {
-        _playSource(index, useFallback: true);
-        return;
-      }
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = "Impossible de lire le flux : $streamUrl ($e)";
-        });
-      }
+      debugPrint("Failed to load stream (${source.title}): $e");
+      _handleSourceError(safeIndex, e.toString(), autoTryCount: autoTryCount);
     }
+  }
+
+  void _handleSourceError(int failedIndex, String errorMsg, {int autoTryCount = 0}) {
+    if (!mounted) return;
+
+    // Si le premier serveur échoue et qu'il y a d'autres serveurs, essayer automatiquement le suivant jusqu'à 2 fois
+    if (autoTryCount < 2 && _sources.length > 1) {
+      final nextIndex = (failedIndex + 1) % _sources.length;
+      debugPrint("Auto-trying next stream: server $nextIndex");
+      _playSource(nextIndex, autoTryCount: autoTryCount + 1);
+      return;
+    }
+
+    final failedSource = _sources[failedIndex];
+    setState(() {
+      _isLoading = false;
+      _errorMessage = "Impossible de lire la source \"${failedSource.title}\".\nVeuillez choisir un autre serveur dans la liste ci-dessous.";
+    });
   }
 
   void _toggleFullscreenMode() {
@@ -211,7 +227,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       _isCanvasFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
                       color: AppTheme.primaryOrange,
                     ),
-                    tooltip: 'Mode Cinéma / Plein écran (F)',
+                    tooltip: 'Mode Plein écran (F)',
                     onPressed: _toggleFullscreenMode,
                   ),
                 ],
@@ -239,10 +255,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
               Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(color: AppTheme.primaryOrange),
+                  const CircularProgressIndicator(color: AppTheme.primaryOrange),
                   const SizedBox(height: 16),
                   Text(
-                    'Connexion au flux ${activeSource?.isDash == true ? "MPEG-DASH (.mpd)" : "HLS (.m3u8)"}...',
+                    'Connexion à ${activeSource?.title ?? "la source"} (${activeSource?.isDash == true ? "MPEG-DASH" : "HLS"})...',
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                   ),
                 ],
@@ -253,26 +269,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+                    const Icon(Icons.cloud_off, color: Colors.orangeAccent, size: 48),
                     const SizedBox(height: 12),
                     Text(
                       _errorMessage!,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70),
+                      style: const TextStyle(color: Colors.white70, fontSize: 14),
                     ),
                     const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primaryOrange,
-                        foregroundColor: Colors.white,
+                    if (_sources.length > 1)
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primaryOrange,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.skip_next),
+                        label: const Text('Essayer la Source Suivante'),
+                        onPressed: () {
+                          final next = (_selectedSourceIndex + 1) % _sources.length;
+                          _playSource(next);
+                        },
                       ),
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Source Suivante'),
-                      onPressed: () {
-                        final next = (_selectedSourceIndex + 1) % _sources.length;
-                        _playSource(next);
-                      },
-                    ),
                   ],
                 ),
               )
@@ -281,46 +300,71 @@ class _PlayerScreenState extends State<PlayerScreen> {
             else
               const SizedBox(),
 
-            // Badge Moteur Actif DASH / HLS en haut à gauche
+            // Badge Protocole (DASH / HLS / DRM)
             if (!_isLoading && activeSource != null)
               Positioned(
                 top: 12,
                 left: 12,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.65),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: activeSource.isDash
-                          ? const Color(0xFF7C4DFF)
-                          : const Color(0xFFFF5722),
-                      width: 1.2,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.stream,
-                        color: activeSource.isDash
-                            ? const Color(0xFF00E5FF)
-                            : const Color(0xFFFF5722),
-                        size: 14,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        activeSource.isDash ? 'MPEG-DASH (.MPD)' : 'HLS (.M3U8)',
-                        style: TextStyle(
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.75),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
                           color: activeSource.isDash
-                              ? const Color(0xFF00E5FF)
-                              : Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                              ? const Color(0xFF7C4DFF)
+                              : const Color(0xFFFF5722),
+                          width: 1.2,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.stream,
+                            color: activeSource.isDash
+                                ? const Color(0xFF00E5FF)
+                                : const Color(0xFFFF5722),
+                            size: 14,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            activeSource.isDash ? 'MPEG-DASH (.MPD)' : 'HLS (.M3U8)',
+                            style: TextStyle(
+                              color: activeSource.isDash
+                                  ? const Color(0xFF00E5FF)
+                                  : Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (activeSource.drmKey != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade900.withOpacity(0.8),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock, color: Colors.white, size: 12),
+                            SizedBox(width: 4),
+                            Text(
+                              'ClearKey DRM',
+                              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                  ),
+                  ],
                 ),
               ),
           ],
@@ -423,8 +467,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Chronomètre : ${ev.timeLabel} • ${_sources.length} flux détectés',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            'Chronomètre : ${ev.timeLabel} • ${_sources.length} sources réelles disponibles',
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],
       ),
@@ -432,6 +476,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildSourcesList() {
+    if (_sources.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.live_tv, color: AppTheme.textSecondary, size: 48),
+              const SizedBox(height: 12),
+              const Text(
+                'Chargement des serveurs en direct...',
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: _loadChannelDetailsAndPlay,
+                child: const Text('Rafraîchir les flux'),
+              )
+            ],
+          ),
+        ),
+      );
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: _sources.length,
@@ -460,50 +528,56 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 size: 20,
               ),
             ),
-            title: Row(
+            title: Text(
+              source.title,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                color: isSelected ? AppTheme.primaryOrange : AppTheme.textPrimary,
+                fontSize: 14,
+              ),
+            ),
+            subtitle: Row(
               children: [
-                Expanded(
-                  child: Text(
-                    source.title,
-                    style: TextStyle(
-                      color: isSelected ? AppTheme.primaryOrange : AppTheme.textPrimary,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
                 Container(
+                  margin: const EdgeInsets.only(top: 4, right: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: source.isDash
-                        ? const Color(0xFF7C4DFF).withOpacity(0.12)
-                        : const Color(0xFFFF5722).withOpacity(0.12),
+                    color: source.isDash ? Colors.deepPurple.shade50 : Colors.blue.shade50,
                     borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: source.isDash ? const Color(0xFF7C4DFF) : const Color(0xFFFF5722),
-                      width: 0.8,
-                    ),
                   ),
                   child: Text(
-                    source.isDash ? 'DASH / MPD' : 'HLS',
+                    source.isDash ? 'MPEG-DASH' : 'HLS (.m3u8)',
                     style: TextStyle(
-                      color: source.isDash ? const Color(0xFF7C4DFF) : const Color(0xFFFF5722),
-                      fontSize: 9,
+                      color: source.isDash ? Colors.deepPurple.shade700 : Colors.blue.shade700,
+                      fontSize: 10,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
+                if (source.drmKey != null)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'ClearKey',
+                      style: TextStyle(
+                        color: Colors.amber.shade900,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
               ],
             ),
-            subtitle: Text(
-              '${source.quality} • ${source.isDash ? "MPEG-DASH Manifest" : "HLS Stream"}',
-              style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
-            ),
             trailing: isSelected
-                ? Icon(Icons.check_circle, color: AppTheme.primaryOrange)
-                : Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+                ? const Icon(Icons.volume_up, color: AppTheme.primaryOrange)
+                : const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textSecondary),
             onTap: () {
-              if (!isSelected) {
+              if (!isSelected || _errorMessage != null) {
                 _playSource(index);
               }
             },

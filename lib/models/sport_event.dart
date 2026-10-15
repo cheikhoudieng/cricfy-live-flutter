@@ -10,6 +10,8 @@ class MatchFormat {
   final String formatType; // 'dash', 'mpd', 'hls', 'mp4', 'auto'
   final String? mimeType;
   final Map<String, String>? headers;
+  final String? drmKey; // Ex: KeyID:Key pour ClearKey DRM
+  final String? streamType; // '7' (dash/cenc) ou '0' (hls/m3u8)
 
   MatchFormat({
     required this.title,
@@ -19,48 +21,83 @@ class MatchFormat {
     this.formatType = 'auto',
     this.mimeType,
     this.headers,
+    this.drmKey,
+    this.streamType,
   });
 
   bool get isDash {
     final lower = (formatType + ' ' + streamUrl + ' ' + (mimeType ?? '')).toLowerCase();
-    return lower.contains('dash') || lower.contains('.mpd') || lower.contains('dash+xml');
+    return streamType == '7' || lower.contains('dash') || lower.contains('.mpd') || lower.contains('cenc');
   }
 
   bool get isHls {
     final lower = (formatType + ' ' + streamUrl + ' ' + (mimeType ?? '')).toLowerCase();
-    return lower.contains('hls') || lower.contains('.m3u8') || lower.contains('mpegurl');
+    return streamType == '0' || lower.contains('hls') || lower.contains('.m3u8') || lower.contains('mpegurl');
   }
 
   factory MatchFormat.fromJson(Map<String, dynamic> json) {
-    final rawFormat = json['format'] ?? json['type'] ?? '';
-    final url = json['streamUrl'] ?? json['webLink'] ?? json['url'] ?? '';
-    final mime = json['mimeType'] ?? json['mime'];
+    // Dans Cricfy TV, le lien est dans la clé 'link' (ou 'streamUrl' / 'webLink')
+    final String rawLink = (json['link'] ?? json['streamUrl'] ?? json['webLink'] ?? json['url'] ?? '').toString().trim();
+    final String rawType = (json['type'] ?? json['format'] ?? '').toString().trim();
+    final String rawApi = (json['api'] ?? '').toString().trim();
 
-    String detectedType = rawFormat.toString().toLowerCase();
-    if (detectedType.isEmpty || detectedType == 'auto') {
-      final u = url.toString().toLowerCase();
-      if (u.contains('.mpd') || u.contains('dash')) {
-        detectedType = 'dash';
-      } else if (u.contains('.m3u8') || u.contains('hls')) {
-        detectedType = 'hls';
-      } else {
-        detectedType = 'auto';
+    String cleanUrl = rawLink;
+    final Map<String, String> parsedHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    };
+
+    // Parser les headers délimités par '|' (Ex: "https://...m3u8?|Referer=https://...&Origin=...")
+    if (rawLink.contains('|')) {
+      final parts = rawLink.split('|');
+      cleanUrl = parts[0].trim();
+      if (parts.length > 1) {
+        final queryHeaders = parts[1].split('&');
+        for (final q in queryHeaders) {
+          final eqIdx = q.indexOf('=');
+          if (eqIdx != -1) {
+            final key = q.substring(0, eqIdx).trim();
+            final val = q.substring(eqIdx + 1).trim();
+            if (key.isNotEmpty && val.isNotEmpty) {
+              parsedHeaders[key] = val;
+            }
+          }
+        }
       }
     }
 
-    Map<String, String>? hdrs;
     if (json['headers'] is Map) {
-      hdrs = (json['headers'] as Map).map((k, v) => MapEntry(k.toString(), v.toString()));
+      (json['headers'] as Map).forEach((k, v) {
+        parsedHeaders[k.toString()] = v.toString();
+      });
+    }
+
+    String detectedType = 'auto';
+    final lowerUrl = cleanUrl.toLowerCase();
+    if (rawType == '7' || lowerUrl.contains('.mpd') || lowerUrl.contains('dash')) {
+      detectedType = 'dash';
+    } else if (rawType == '0' || lowerUrl.contains('.m3u8') || lowerUrl.contains('hls')) {
+      detectedType = 'hls';
+    } else if (lowerUrl.contains('.mp4')) {
+      detectedType = 'mp4';
+    }
+
+    String qualityBadge = 'Full HD';
+    if (detectedType == 'dash') {
+      qualityBadge = '1080p DASH';
+    } else if (detectedType == 'hls') {
+      qualityBadge = 'Live HLS';
     }
 
     return MatchFormat(
       title: json['title'] ?? 'Serveur Principal',
-      quality: json['quality'] ?? (detectedType == 'dash' ? '1080p MPEG-DASH' : 'Full HD'),
-      webLink: json['webLink'] ?? url,
-      streamUrl: url,
+      quality: json['quality'] ?? qualityBadge,
+      webLink: rawLink,
+      streamUrl: cleanUrl,
       formatType: detectedType,
-      mimeType: mime,
-      headers: hdrs,
+      mimeType: json['mimeType'] ?? json['mime'],
+      headers: parsedHeaders,
+      drmKey: rawApi.isNotEmpty ? rawApi : null,
+      streamType: rawType.isNotEmpty ? rawType : null,
     );
   }
 }

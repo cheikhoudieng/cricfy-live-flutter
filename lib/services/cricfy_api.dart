@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/sport_event.dart';
 import 'crypto_service.dart';
@@ -35,7 +36,7 @@ class CricfyApi {
     return jsonList.map((item) => SportEvent.fromJson(item)).toList();
   }
 
-  /// Récupère dynamiquement les flux et serveurs d'un match (DASH / HLS)
+  /// Récupère dynamiquement les flux réels d'un événement (streamUrls avec DASH/HLS, liens et headers)
   static Future<List<MatchFormat>> fetchChannelFormats(String slug) async {
     try {
       final url = '$baseUrl/channels/$slug.txt';
@@ -48,14 +49,20 @@ class CricfyApi {
         final decryptedJson = CryptoService.decodeOrDecrypt(encryptedText);
         if (decryptedJson != null && decryptedJson.isNotEmpty) {
           final Map<String, dynamic> data = jsonDecode(decryptedJson);
-          if (data['formats'] is List) {
-            return (data['formats'] as List)
+
+          // Clé exacte dans Cricfy TV : 'streamUrls'
+          final dynamic list = data['streamUrls'] ?? data['formats'] ?? data['streams'];
+          if (list is List) {
+            return list
+                .whereType<Map<String, dynamic>>()
                 .map((e) => MatchFormat.fromJson(e))
                 .toList();
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("Error fetching channel formats for $slug: $e");
+    }
     return [];
   }
 }
