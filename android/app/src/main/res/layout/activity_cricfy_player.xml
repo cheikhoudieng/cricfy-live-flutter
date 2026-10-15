@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/player_root_layout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000">
 
+    <!-- Vue Vidéo ExoPlayer Native -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/cricfy_player_view"
         android:layout_width="match_parent"
@@ -15,14 +17,46 @@
         app:show_buffering="when_playing"
         app:resize_mode="fit" />
 
+    <!-- Bannière de reconnexion automatique en cas de coupure du flux -->
+    <LinearLayout
+        android:id="@+id/reconnect_banner"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@android:drawable/dialog_holo_dark_frame"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:indeterminate="true" />
+
+        <TextView
+            android:id="@+id/reconnect_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:text="Reconnexion au flux en cours..." />
+    </LinearLayout>
+
     <!-- Barre supérieure de contrôle personnalisée -->
     <LinearLayout
+        android:id="@+id/player_top_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
-        android:background="#66000000"
+        android:background="#88000000"
         android:orientation="horizontal"
-        android:padding="8dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
         android:gravity="center_vertical">
 
         <ImageButton
@@ -34,28 +68,82 @@
             android:tint="#FFFFFF"
             android:contentDescription="Retour" />
 
+        <!-- Badge Live -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="6dp"
+            android:background="#FF453A"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:text="● DIRECT"
+            android:textColor="#FFFFFF"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
         <TextView
             android:id="@+id/player_title_text"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="4dp"
             android:layout_marginEnd="8dp"
             android:textColor="#FFFFFF"
-            android:textSize="15sp"
+            android:textSize="14sp"
             android:textStyle="bold"
             android:singleLine="true"
             android:ellipsize="end"
             android:text="Cricfy Live" />
 
+        <!-- Bouton Ratio d'affichage (16:9 / Zoom / Fill) -->
+        <Button
+            android:id="@+id/player_aspect_ratio_btn"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="48dp"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:text="16:9" />
+
+        <!-- Bouton Rafraîchir / Reconnecter -->
         <ImageButton
-            android:id="@+id/player_servers_btn"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:id="@+id/player_refresh_btn"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_menu_sort_by_size"
-            android:tint="#FF9800"
-            android:contentDescription="Serveurs" />
+            android:src="@android:drawable/ic_menu_rotate"
+            android:tint="#FFFFFF"
+            android:contentDescription="Rafraîchir" />
+
+        <!-- Bouton Bascule Plein écran pour Samsung DeX / Multifenêtre -->
+        <ImageButton
+            android:id="@+id/player_fullscreen_btn"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_crop"
+            android:tint="#FFFFFF"
+            android:contentDescription="Plein écran DeX" />
+
+        <!-- Bouton Liste des Serveurs -->
+        <Button
+            android:id="@+id/player_servers_btn"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
+            android:background="#FF9800"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:text="Serveurs" />
     </LinearLayout>
 
 </FrameLayout>

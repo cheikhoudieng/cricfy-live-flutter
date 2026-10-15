@@ -31,6 +31,8 @@
             android:exported="false"
             android:theme="@style/NormalTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
             android:hardwareAccelerated="true" />
         <meta-data
             android:name="flutterEmbedding"

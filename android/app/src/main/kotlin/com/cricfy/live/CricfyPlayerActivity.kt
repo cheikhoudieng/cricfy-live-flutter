@@ -1,12 +1,19 @@
 package com.cricfy.live
 
 import android.app.Activity
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
@@ -22,6 +29,7 @@ import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
 import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -41,11 +49,34 @@ class CricfyPlayerActivity : Activity() {
 
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
+    private var topBar: View? = null
+    private var reconnectBanner: LinearLayout? = null
+    private var reconnectText: TextView? = null
+
     private var currentUrl: String = ""
     private var currentDrmKey: String? = null
     private var currentTitle: String = ""
     private val currentHeaders = HashMap<String, String>()
     private val serversList = ArrayList<ServerItem>()
+    private var currentServerIndex = 0
+
+    // Gestion de la reconnexion automatique
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var retryCount = 0
+    private val maxRetries = 4
+    private var isReconnecting = false
+
+    // Aspect Ratio
+    private var currentResizeModeIndex = 0
+    private val resizeModes = intArrayOf(
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+        AspectRatioFrameLayout.RESIZE_MODE_FILL
+    )
+    private val resizeModeLabels = arrayOf("16:9", "ZOOM", "FILL")
+
+    // Plein écran
+    private var isFullscreen = true
 
     data class ServerItem(
         val title: String,
@@ -58,13 +89,33 @@ class CricfyPlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Plein écran et maintien de l'écran allumé
+        // Garder l'écran allumé
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        hideSystemUi()
 
+        // Rendu plein écran bord-à-bord fluide sans artefact d'encoche
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+
+        // Détection de Samsung DeX
+        val isDex = isSamsungDeX(this)
+        if (!isDex) {
+            // Sur téléphone : passage automatique en mode paysage sans glitch
+            try {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } catch (e: Exception) {
+                Log.w(TAG, "Impossible de verrouiller l'orientation", e)
+            }
+        }
+
+        hideSystemUi()
         setContentView(R.layout.activity_cricfy_player)
 
         playerView = findViewById(R.id.cricfy_player_view)
+        topBar = findViewById(R.id.player_top_bar)
+        reconnectBanner = findViewById(R.id.reconnect_banner)
+        reconnectText = findViewById(R.id.reconnect_text)
 
         // Récupérer les paramètres d'intention
         currentTitle = intent.getStringExtra(EXTRA_TITLE) ?: "Cricfy Live"
@@ -107,47 +158,125 @@ class CricfyPlayerActivity : Activity() {
             }
         }
 
-        setupCustomControls()
+        // Trouver l'index actuel
+        for (i in serversList.indices) {
+            if (serversList[i].streamUrl == currentUrl) {
+                currentServerIndex = i
+                break
+            }
+        }
+
+        setupControls()
         initPlayer(currentUrl, currentDrmKey, currentHeaders)
     }
 
-    private fun setupCustomControls() {
+    private fun isSamsungDeX(context: Context): Boolean {
+        val uiMode = context.resources.configuration.uiMode
+        if ((uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_DESKTOP) {
+            return true
+        }
+        try {
+            val config = context.resources.configuration
+            val semDesktopModeEnabled = config.javaClass.getField("semDesktopModeEnabled").getInt(config)
+            if (semDesktopModeEnabled == 1) return true
+        } catch (_: Exception) {}
+        return false
+    }
+
+    private fun setupControls() {
         val titleView = findViewById<TextView>(R.id.player_title_text)
         titleView?.text = currentTitle
 
-        val backBtn = findViewById<ImageButton>(R.id.player_back_btn)
-        backBtn?.setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.player_back_btn)?.setOnClickListener { finish() }
 
-        val serverBtn = findViewById<ImageButton>(R.id.player_servers_btn)
+        val serverBtn = findViewById<Button>(R.id.player_servers_btn)
         if (serversList.isNotEmpty()) {
             serverBtn?.visibility = View.VISIBLE
             serverBtn?.setOnClickListener { showServersMenu(it) }
         } else {
             serverBtn?.visibility = View.GONE
         }
+
+        // Bouton Aspect Ratio
+        val aspectBtn = findViewById<Button>(R.id.player_aspect_ratio_btn)
+        aspectBtn?.text = resizeModeLabels[currentResizeModeIndex]
+        aspectBtn?.setOnClickListener {
+            currentResizeModeIndex = (currentResizeModeIndex + 1) % resizeModes.size
+            val mode = resizeModes[currentResizeModeIndex]
+            playerView?.resizeMode = mode
+            aspectBtn.text = resizeModeLabels[currentResizeModeIndex]
+        }
+
+        // Bouton Rafraîchir
+        findViewById<ImageButton>(R.id.player_refresh_btn)?.setOnClickListener {
+            retryCount = 0
+            Toast.makeText(this, "Actualisation du flux...", Toast.LENGTH_SHORT).show()
+            initPlayer(currentUrl, currentDrmKey, currentHeaders)
+        }
+
+        // Bouton Plein écran DeX
+        findViewById<ImageButton>(R.id.player_fullscreen_btn)?.setOnClickListener {
+            isFullscreen = !isFullscreen
+            if (isFullscreen) {
+                hideSystemUi()
+            } else {
+                showSystemUi()
+            }
+        }
+
+        // Auto-masquage de la barre de contrôle
+        scheduleAutoHideControls()
+        playerView?.setOnClickListener {
+            if (topBar?.visibility == View.VISIBLE) {
+                topBar?.visibility = View.GONE
+            } else {
+                topBar?.visibility = View.VISIBLE
+                scheduleAutoHideControls()
+            }
+        }
+    }
+
+    private val hideControlsRunnable = Runnable {
+        topBar?.visibility = View.GONE
+    }
+
+    private fun scheduleAutoHideControls() {
+        mainHandler.removeCallbacks(hideControlsRunnable)
+        mainHandler.postDelayed(hideControlsRunnable, 4500L)
     }
 
     private fun showServersMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
         for (i in serversList.indices) {
             val s = serversList[i]
-            val badge = if (!s.drmKey.isNullOrEmpty()) "[ClearKey DASH]" else if (s.isDash) "[DASH]" else "[HLS]"
-            popup.menu.add(0, i, i, "$badge ${s.title}")
+            val badge = if (!s.drmKey.isNullOrEmpty()) "⚡ [ClearKey DASH]" else if (s.isDash) "[DASH]" else "🟢 [DIRECT HLS]"
+            val mark = if (i == currentServerIndex) "✓ " else ""
+            popup.menu.add(0, i, i, "$mark$badge ${s.title}")
         }
         popup.setOnMenuItemClickListener { item ->
             val index = item.itemId
             if (index in serversList.indices) {
-                val selected = serversList[index]
-                Toast.makeText(this, "Connexion à : ${selected.title}", Toast.LENGTH_SHORT).show()
-                currentUrl = selected.streamUrl
-                currentDrmKey = selected.drmKey
-                currentHeaders.clear()
-                currentHeaders.putAll(selected.headers)
-                initPlayer(currentUrl, currentDrmKey, currentHeaders)
+                switchToServer(index)
             }
             true
         }
         popup.show()
+    }
+
+    private fun switchToServer(index: Int) {
+        currentServerIndex = index
+        val selected = serversList[index]
+        Toast.makeText(this, "Serveur : ${selected.title}", Toast.LENGTH_SHORT).show()
+        currentUrl = selected.streamUrl
+        currentDrmKey = selected.drmKey
+        currentHeaders.clear()
+        currentHeaders.putAll(selected.headers)
+
+        val titleView = findViewById<TextView>(R.id.player_title_text)
+        titleView?.text = "$currentTitle - ${selected.title}"
+
+        retryCount = 0
+        initPlayer(currentUrl, currentDrmKey, currentHeaders)
     }
 
     private fun initPlayer(url: String, drmKey: String?, headers: Map<String, String>) {
@@ -155,6 +284,9 @@ class CricfyPlayerActivity : Activity() {
             Toast.makeText(this, "URL de flux vide", Toast.LENGTH_SHORT).show()
             return
         }
+
+        mainHandler.removeCallbacksAndMessages(null)
+        hideReconnectBanner()
 
         player?.release()
         player = null
@@ -171,7 +303,7 @@ class CricfyPlayerActivity : Activity() {
 
         val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
 
-        // Configuration ClearKey DRM
+        // ClearKey DRM
         val hasClearKey = !drmKey.isNullOrEmpty() && drmKey.contains(":")
         if (hasClearKey) {
             try {
@@ -214,17 +346,26 @@ class CricfyPlayerActivity : Activity() {
         exo.setMediaItem(mediaItemBuilder.build())
         exo.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                Log.e(TAG, "Erreur lecture ExoPlayer: ${error.errorCodeName} - ${error.message}", error)
-                Toast.makeText(
-                    this@CricfyPlayerActivity,
-                    "Échec de lecture sur ce serveur (${error.errorCodeName}). Essayez un autre serveur.",
-                    Toast.LENGTH_LONG
-                ).show()
+                Log.w(TAG, "Erreur flux (${error.errorCodeName}): ${error.message}")
+                handlePlaybackFailure()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) {
-                    Log.d(TAG, "Flux prêt et décodé avec succès !")
+                when (playbackState) {
+                    Player.STATE_READY -> {
+                        hideReconnectBanner()
+                        retryCount = 0
+                        isReconnecting = false
+                        Log.d(TAG, "Flux en lecture avec succès !")
+                    }
+                    Player.STATE_BUFFERING -> {
+                        // Si le buffering reste bloqué plus de 12 secondes, déclencher une reconnexion
+                        scheduleBufferingTimeout()
+                    }
+                    Player.STATE_ENDED -> {
+                        // Fin de flux inattendue (coupure réseau sur direct)
+                        handlePlaybackFailure()
+                    }
                 }
             }
         })
@@ -234,6 +375,57 @@ class CricfyPlayerActivity : Activity() {
 
         player = exo
         playerView?.player = exo
+        playerView?.resizeMode = resizeModes[currentResizeModeIndex]
+    }
+
+    private var bufferingTimeoutRunnable: Runnable? = null
+    private fun scheduleBufferingTimeout() {
+        bufferingTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        bufferingTimeoutRunnable = Runnable {
+            if (player?.playbackState == Player.STATE_BUFFERING) {
+                Log.w(TAG, "Délai de buffering dépassé -> tentative de reconnexion")
+                handlePlaybackFailure()
+            }
+        }
+        mainHandler.postDelayed(bufferingTimeoutRunnable!!, 12000L)
+    }
+
+    // Gestion de la reconnexion automatique quand le flux s'arrête
+    private fun handlePlaybackFailure() {
+        if (isFinishing || isDestroyed) return
+
+        if (retryCount < maxRetries) {
+            retryCount++
+            isReconnecting = true
+            showReconnectBanner("Flux interrompu. Reconnexion automatique ($retryCount/$maxRetries)...")
+            mainHandler.postDelayed({
+                if (!isFinishing && !isDestroyed) {
+                    initPlayer(currentUrl, currentDrmKey, currentHeaders)
+                }
+            }, 2500L)
+        } else {
+            // Après épuisement des tentatives sur ce serveur, basculer automatiquement sur le serveur suivant si disponible
+            if (serversList.size > 1) {
+                val nextIndex = (currentServerIndex + 1) % serversList.size
+                showReconnectBanner("Bascule automatique sur le serveur : ${serversList[nextIndex].title}...")
+                mainHandler.postDelayed({
+                    if (!isFinishing && !isDestroyed) {
+                        switchToServer(nextIndex)
+                    }
+                }, 1500L)
+            } else {
+                showReconnectBanner("Flux actuellement indisponible. Réessayez dans quelques instants.")
+            }
+        }
+    }
+
+    private fun showReconnectBanner(message: String) {
+        reconnectText?.text = message
+        reconnectBanner?.visibility = View.VISIBLE
+    }
+
+    private fun hideReconnectBanner() {
+        reconnectBanner?.visibility = View.GONE
     }
 
     private fun hexToByteArray(hex: String): ByteArray {
@@ -259,6 +451,18 @@ class CricfyPlayerActivity : Activity() {
         )
     }
 
+    private fun showSystemUi() {
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Gestion fluide du redimensionnement (Samsung DeX / mode fenêtré)
+        hideSystemUi()
+    }
+
     override fun onResume() {
         super.onResume()
         hideSystemUi()
@@ -272,6 +476,7 @@ class CricfyPlayerActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
     }
