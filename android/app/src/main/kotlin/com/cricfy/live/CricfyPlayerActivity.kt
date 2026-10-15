@@ -172,7 +172,8 @@ class CricfyPlayerActivity : Activity() {
 
     private fun isSamsungDeX(context: Context): Boolean {
         val uiMode = context.resources.configuration.uiMode
-        if ((uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_DESKTOP) {
+        // UI_MODE_TYPE_DESKTOP = 0x08 (Android API 34+ / Samsung DeX)
+        if ((uiMode and Configuration.UI_MODE_TYPE_MASK) == 0x08) {
             return true
         }
         try {
